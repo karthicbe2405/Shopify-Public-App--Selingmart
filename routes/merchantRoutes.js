@@ -1,92 +1,50 @@
 var express = require('express');
 var router = express.Router();
-let dotenv = require('dotenv').config();
-let nonce = require('nonce')();
-let querystring = require('querystring');
-let crypto = require('crypto');
-let request = require('request-promise');
-let session = require('express-session');
-
+let Oauth = require('../services/oAuthServices/oAuth');
+let merchant = require('../services/merchantService/merchant');
+let jwt = require('../utils/jwt');
 
 router.get('/shopify',(req,res)=>{
-
+    
     let shopName = req.query.shop;
+
     if(shopName){
-        let  homeUrl = process.env.HOME_URL;
-        let apiKey = process.env.SHOPIFY_API_KEY;
-        let scope = process.env.SCOPE;
-        let state = nonce();
-        let installUrl = 'https://' + shopName + '.myshopify.com/admin/oauth/authorize?client_id=' + apiKey + '&scope=' + scope + '&redirect_uri=' + homeUrl + '/shopify/auth&state=' + state + '&grant_options[]=per-user';
-        //res.cookie('state',state);
-        res.redirect(installUrl);
+        Oauth.getOauth(req,res);
     }
     else{
-        res.status(404).send('Shop Name Required');
+        res.status(404).json({'Message' : 'ShopName Required'});
     }
-    
+
 });
 
-router.get('/shopify/auth', (req,res) =>{
+router.get('/shopify/auth', async (req,res) =>{
+    
     let {shop, hmac, code, state} = req.query;
+    
+    if(shop, hmac, code, state){
 
-    // let stateCookies = req.cookies.state;
-    // if(stateCookies != state){
-    //     console.log("Cookie Not Equal " + stateCookies + " " + state);
-    //     console.log(shop + ' ' + hmac + ' ' + code + ' ' + state);
-    //     res.status(404).send("Cookie Problem");
-    // }
+        try{
 
-    if(shop && hmac && code){
-        
-        console.log("Every Parameters Recieved Successfully");
+            let accessTokenResponse = await Oauth.getAccessToken(shop,hmac,code,state);
+            let merchantDocument = await merchant.merchantSignup(shop,accessTokenResponse.access_token);
+            let token = await jwt.generateToken(merchantDocument._id);
+            res.status(200).json({'Jwt' : token});
 
-        const map = Object.assign({},req.query);
-        delete map['hmac'];
-        const message = querystring.stringify(map);
+        }
+        catch(err){
 
-        // const generatedHash = crypto.createHmac('abc123',process.env.SHOPIFY_API_SECRET).update(message).digest('hex');
-        // console.log(generatedHash + " " + hmac);
-        // if(generatedHash != hmac){
-        //     console.log(generatedHash + " " + hmac);
-        //     console.log("Hmac Validation Failed");
-        //     res.status(404).send("Authentication Failed");
-        // }
-        // else{
-            
-            // getting Access Token
-            let acccessTokenRequesrUrl = 'https://' + shop + '/admin/oauth/access_token'
-            let accessTokenPayLoad = {
-                client_id : process.env.SHOPIFY_API_KEY,
-                client_secret : process.env.SHOPIFY_API_SECRET,
-                code
-            }
+            console.log('The error is' + err);
+            res.status(404).json({'Message' : 'Something Went Wrong'});
 
-            request.post(acccessTokenRequesrUrl,{json : accessTokenPayLoad}).then((accessTokenResponse)=>{
-                let access_token = accessTokenResponse.access_token;
-                console.log("Access Token " + access_token);
-
-                //Geeting List of Products in the Store  using Api Call
-                let apiRequestUrl = 'https://' + shop + '/admin/api/2021-07/products.json';
-                let apiRequestHeader = {
-                    'X-Shopify-Access-Token' : access_token
-                };
-
-                request.get(apiRequestUrl,{headers : apiRequestHeader})
-                .then((apiResponse)=>{
-                    console.log("Products Retrieved Successfully");
-                    res.end(apiResponse);
-                })
-                .catch((err)=>{
-                    console.log("Some Error Occured During Products Retrieval");
-                    res.status(404).send("Something Went Wrong" + err);
-                })
-
-            });
+        }
+                  
     }
     else{
-        res.status(404).send("Required Parameters Missing");
+
+        res.status(404).json({'Message':'Required Parameters Not Recived From Shopify Redirection URL'});
+
     }
-    
+
 });
 
 module.exports = router;
